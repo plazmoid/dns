@@ -12,7 +12,7 @@ def beautifulpacket(data):
         return
     print('Server failure!' if Packet.btoi(data['Flags']) & 0b0010 == 2 else '')
     if len(data['Answers']) > 0:
-        print('\tName | Type | Class | TTL | Data length | Address\n')
+        print('\tName | Type | Class | TTL | Data length | Data\n')
         for answer in data['Answers']:
             print('\t'+' | '.join(str(i) for i in answer.values()))
         print()
@@ -21,39 +21,32 @@ def dnsing(url, types, addr, allowtcp=False, recursive=True):
     params = {'Name': url,
               'Class': 'IN'}
     
-    sock = None
-    try:
-        if allowtcp:
-            def cli_ask(data):
-                sock = s.socket(s.AF_INET, s.SOCK_STREAM, s.IPPROTO_TCP)
+    if allowtcp:
+        def cli_ask(data):
+            with s.socket(s.AF_INET, s.SOCK_STREAM, s.IPPROTO_TCP) as sock:
                 sock.connect((addr, 53))
                 sock.settimeout(3)
                 sock.send(data)
                 return sock.recv(2048)
-        else:
-            def cli_ask(data):
-                sock = s.socket(s.AF_INET, s.SOCK_DGRAM, s.IPPROTO_UDP)
+    else:
+        def cli_ask(data):
+            with s.socket(s.AF_INET, s.SOCK_DGRAM, s.IPPROTO_UDP) as sock:
                 sock.settimeout(3)
                 sock.sendto(data, (addr, 53))
                 return sock.recv(2048)
-            
         
-        for wtype in types:
-            params['Type'] = wtype
-            packet = Packet.DNSPacket()
-            packet.addField('Queries', params)
-            #print(packet.getParsedData())
-            #print(packet.getRawData())
-            with s.socket(s.AF_INET, s.SOCK_DGRAM) as sock:
-                answer = cli_ask(packet.getRawData())
-                #print('ANSWER:', data)
-                beautifulpacket(Packet.DNSPacket(answer).getParsedData())
-    finally:
-        sock.close()
+    for wtype in types:
+        packet = Packet.DNSPacket()
+        params['Type'] = wtype
+        packet.addField('Queries', params)
+        answer = cli_ask(packet.getRawData())
+        beautifulpacket(Packet.DNSPacket(answer).getParsedData())
+
 
 def usage():
-    print('Usage: %s URL -t type1 type2 ... [-s dnsserv IP]' % (__file__))
+    print('Usage: %s host -t type1 type2 ... [-s dnsserv IP]' % (__file__))
     sys.exit(1)
+
 
 def main():
     '''Client.py ya.ru -t A NS AAAA -s'''

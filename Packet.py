@@ -1,11 +1,17 @@
-import traceback
 from collections import OrderedDict
 from math import log2
 from datatypes import FlaggedDict, DoubleDict
+import traceback
+import re
 
 
 TTL = 86400
 packet_id = 0x1010
+
+SRV_FAILURE =   0x0002
+ACC_NON_AUTH =  0x0010
+RECURSIVE =     0x0100
+IS_RESPONSE =   0x8000
 
 
 def btoi(b):
@@ -15,6 +21,16 @@ def btoi(b):
 def itob(num, s=0):
     return num.to_bytes(s if s else int(log2(num) // 8 + 1), 'big')
 
+
+def ipv6_decoder(bin_addr):
+    res = ['']
+    for i in range(len(bin_addr)):
+        res[-1] += '{:02x}'.format(bin_addr[i])
+        if i % 2:
+            res[-1] = hex(int(res[-1], 16))[2:]
+            res.append('')
+    return re.sub(r'(0+:)+', ':', ':'.join(res[:-1]))
+            
 
 allFields = OrderedDict({
     'Queries': ('Name', 'Type', 'Class'),
@@ -28,6 +44,8 @@ fieldSections = list(allFields.keys())
 class DNSPacket:
 
     def __init__(self, rawdata=None):
+        if rawdata and type(rawdata) != bytes:
+            raise Exception('DNSPacket needs bytes or None argument')
         self.__binarydata = rawdata
         self.classes = {b'\x00\x01': 'IN'}
         self.types = DoubleDict({b'\x00\x01': 'A',
@@ -41,58 +59,57 @@ class DNSPacket:
         
         self.__records = FlaggedDict({g:[] for g in fieldSections})
         self.readOffs = 0
-        self.offsets = {}
+        self.zone_offsets = {}
         
-        if type(self.__binarydata) != bytes:
-            self.__createPacket()
+        if not self.__binarydata:
+            self.__configure_packet()
         self.__parse()
             
     @staticmethod
-    def strEncode(bStr) -> bytes:
+    def domain_encode(bStr) -> bytes:
         '''serialize string into zone1_len+zone1+(zone2_len)+zone2...\0'''
         if type(bStr) == str:
             bStr = bStr.split('.')
-        return b''.join(itob(len(i))+i.encode('ascii') for i in bStr) + b'\x00'
+        return b''.join(b'%s%s' % (itob(len(i)), bytes(i, 'ascii')) for i in bStr) + b'\x00'
     
-    def __createPacket(self):        
+    def __configure_packet(self):        
         global packet_id
         self.__binarydata = b''.join([
-            itob(packet_id, 2), #transaction ID
-            b'\x00\x10', #no flags
+            itob(packet_id, 2),
+            itob(ACC_NON_AUTH | RECURSIVE, 2)
         ])
         packet_id += 0x0A
 
-    def removeField(self, dkey):
-        self.__records[dkey].clear()
+    def removeField(self, k):
+        self.__records[k].clear()
 
-    def addField(self, section, argdict):
+    def addField(self, section, params):
         if section not in fieldSections:
             raise KeyError('Unknown DNS-section', section, 'must be one of', fieldSections)
-        if set(argdict.keys()) != set(allFields[section]):
+        if set(params.keys()) != set(allFields[section]):
             raise KeyError('Wrong section parameters, must be: ' + ', '.join(allFields[section]))
-        self.__records[section].append(argdict)
+        self.__records[section].append(params)
 
     def __setPointers(self, bstr) -> str:
         '''расстановка указателей на строки в бинарном представлении пакета, ищет в дополнительном буфере (не в основном!)'''
-        self.pbdata = bytes(self.bindata)
         for i in range(len(bstr)):
-            self.text = self.strEncode(bstr[i:])
-            if self.text in self.offsets.keys() and self.text in self.pbdata:
-                return self.strEncode(bstr[:i])[:-1] + self.offsets[self.text]
-            self.doffs = self.pbdata.find(self.text)
-            if self.doffs != -1:
+            partial_domain = self.domain_encode(bstr[i:])
+            if partial_domain in self.zone_offsets.keys() and partial_domain in self.tmp_bindata:
+                return self.domain_encode(bstr[:i])[:-1] + self.zone_offsets[partial_domain]
+            self.doffs = self.tmp_bindata.find(partial_domain)
+            if ~self.doffs:
                 #print('bstr:', self.itob(0xc000 | self.doffs, 2), i, bstr[:i])
-                self.offsets[self.text] = itob(0xc000 | self.doffs, 2)
-                return self.strEncode(bstr[:i])[:-1] + self.offsets[self.text]
-        return self.strEncode(bstr)
+                self.zone_offsets[partial_domain] = itob(0xc000 | self.doffs, 2)
+                return self.domain_encode(bstr[:i])[:-1] + self.zone_offsets[partial_domain]
+        return self.domain_encode(bstr)
         
     def __serialize(self):
-        self.lens = [len(self.__records[i]) for i in fieldSections]
-        self.bindata = bytearray(b''.join([
+        self.lens = list(map(lambda x: len(self.__records[x]), fieldSections))
+        self.tmp_bindata = bytearray(b''.join([
             self.__records['ID'],
             self.__records['Flags']
         ]))
-        self.bindata.extend(b''.join(itob(i, 2) for i in self.lens))
+        self.tmp_bindata.extend(b''.join(itob(i, 2) for i in self.lens))
         self.lens = self.lens.__iter__()
         for fieldsection in fieldSections:
             for counter in range(self.lens.__next__()):
@@ -116,10 +133,10 @@ class DNSPacket:
                         elif ':' in self.itm:
                             self.itm = b''.join(map(lambda a: itob(int(a, 16), 1), self.itm.split(':')))  
                     elif field == 'Name' or field == 'Name server' or field == 'CNAME':
-                        #print(self.itm, self.bindata)
+                        #print(self.itm, self.tmp_bindata)
                         self.itm = self.__setPointers(self.itm.split('.'))
-                    self.bindata.extend(self.itm)
-        self.__binarydata = bytes(self.bindata)
+                    self.tmp_bindata.extend(self.itm)
+        self.__binarydata = bytes(self.tmp_bindata)
         self.__records.store()
 
     def __parse(self):
@@ -146,13 +163,14 @@ class DNSPacket:
                         else:
                             if self.fields['Type'] == 'CNAME':
                                 self.fields['CNAME'] = self.strDecode(self.__substr(self.fields['Data length']), move_carriage=False).decode('ascii')
-                            else:
-                                if self.fields['Data length'] == 16:
-                                    self.fields['Address'] = ':'.join(hex(i)[2:] for i in self.__substr(16))
-                                else:
-                                    self.fields['Address'] = '.'.join(str(i) for i in self.__substr(4))
+                            elif self.fields['Type'] == 'AAAA':
+                                self.fields['Address'] = ipv6_decoder(self.__substr(16))
+                            elif self.fields['Type'] == 'A':
+                                self.fields['Address'] = '.'.join(map(lambda x: str(x), self.__substr(4)))
+                            elif self.fields['Type'] == 'MX':
+                                self.__substr(2) #skip preference
+                                self.fields['Address'] = self.strDecode(self.__substr(self.fields['Data length']), move_carriage=False).decode('ascii')
                     self.__records[fgroup].append(self.fields)
-                #print('FINALLY:', self.__binarydata[self.readOffs:])
         except ArithmeticError:
             traceback.print_exc()
             print('Error was in', self.readOffs)
@@ -164,9 +182,9 @@ class DNSPacket:
         return self.sub
     
     def getItemByOffset(self, bStr) -> str:
-        if bStr not in self.offsets.keys():
-            self.offsets[bStr] = self.strDecode(self.__binarydata[btoi(bStr) & 0x3fff:], move_carriage=False)
-        return self.offsets[bStr]
+        if bStr not in self.zone_offsets.keys():
+            self.zone_offsets[bStr] = self.strDecode(self.__binarydata[btoi(bStr) & 0x3fff:], move_carriage=False)
+        return self.zone_offsets[bStr]
 
     def strDecode(self, bStr, move_carriage=True) -> bytes:
         '''парсит бинарную строку из пакета (с длинами до точек и указателями) в читабельную'''

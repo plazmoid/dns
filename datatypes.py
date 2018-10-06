@@ -29,7 +29,8 @@ class FlaggedDict(dict):
         self.__old_vals = self.values()
         
     def has_changed(self):
-        return self.values() == self.__old_vals
+        return self.values() != self.__old_vals
     
     def store(self):
         self.__old_vals = self.values()
+        
