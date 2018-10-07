@@ -5,16 +5,21 @@ import sys
 
 
 def beautifulpacket(data):
+    hdrs = ['Name', 'Type', 'Class', 'TTL', 'Data length', 'Data']
     try:
-        print(' '.join(i for i in data['Queries'][0].values()), end=' ')
+        print(' '.join(i for i in data['Queries'][0].values()))
     except:
         print(data)
         return
-    print('Server failure!' if Packet.btoi(data['Flags']) & 0b0010 == 2 else '')
+    if data['Flags'] & Packet.SRV_FAIL:
+        print('Server failure!')
+        return
     if len(data['Answers']) > 0:
-        print('\tName | Type | Class | TTL | Data length | Data\n')
+        if data['Flags'] & ~Packet.AUTH_RESP:
+            print('Non-authoritative response')
+        print('\t%s' % ' | '.join(hdrs))
         for answer in data['Answers']:
-            print('\t'+' | '.join(str(i) for i in answer.values()))
+            print('\t'+' \t| '.join(str(i) for i in answer.values()))
         print()
 
 def dnsing(url, types, addr, allowtcp=False, recursive=True):
@@ -39,12 +44,18 @@ def dnsing(url, types, addr, allowtcp=False, recursive=True):
         packet = Packet.DNSPacket()
         params['Type'] = wtype
         packet.addField('Queries', params)
+        if not recursive:
+            packet.flags(~Packet.RECURSIVE)
         answer = cli_ask(packet.getRawData())
         beautifulpacket(Packet.DNSPacket(answer).getParsedData())
 
 
 def usage():
-    print('Usage: %s host -t type1 type2 ... [-s dnsserv IP]' % (__file__))
+    print('''Usage: %s host -t type1 type2 ... [-R] [-tcp] [-s dnsserver]
+    -R\t\t disable recursion
+    -s\t\t use user-defined server
+    -t\t\t record types splitted with space
+    -tcp\t encapsulate in TCP''' % (__file__))
     sys.exit(1)
 
 
@@ -63,6 +74,6 @@ def main():
     except IndexError:
         servaddr = '8.8.8.8'
         print('Using default DNS-server:', servaddr, '\n')
-    dnsing(src, types, servaddr, allowtcp=('-tcp' in args))
+    dnsing(src, types, servaddr, allowtcp=('-tcp' in args), recursive=('-R' not in args))
     
 main()
