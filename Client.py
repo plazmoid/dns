@@ -14,6 +14,9 @@ def beautifulpacket(data):
     if data['Flags'] & Packet.SRV_FAIL:
         print('Server failure!')
         return
+    if data['Flags'] & Packet.SRV_REFSD:
+        print('Refused')
+        return
     if len(data['Answers']) > 0:
         if data['Flags'] & ~Packet.AUTH_RESP:
             print('Non-authoritative response')
@@ -41,26 +44,26 @@ def dnsing(url, types, addr, allowtcp=False, recursive=True):
                 return sock.recv(2048)
         
     for wtype in types:
-        packet = Packet.DNSPacket()
+        packet = Packet.DNSPacket(tcp=allowtcp)
         params['Type'] = wtype.upper()
         packet.addField('Queries', params)
         if not recursive:
             packet.flags(~Packet.RECURSIVE)
+        #print(packet.getRawData())
         answer = cli_ask(packet.getRawData())
-        beautifulpacket(Packet.DNSPacket(answer).getParsedData())
+        beautifulpacket(Packet.DNSPacket(answer, tcp=allowtcp).getParsedData())
 
 
 def usage():
-    print('''Usage: %s host -t type1 type2 ... [-R] [-tcp] [-s dnsserver]
-    -R\t\t disable recursion
-    -s\t\t use user-defined server
-    -t\t\t record types splitted with space
-    -tcp\t encapsulate in TCP''' % (__file__))
+    print('''Usage: %s host -t type1 type2 ... [-R] [-T] [-s dnsserver]
+    -R\t disable recursion
+    -s\t use user-defined server
+    -t\t record types splitted with space
+    -T\t use TCP''' % (__file__))
     sys.exit(1)
 
 
 def main():
-    '''Client.py ya.ru -t A NS AAAA -s'''
     try:
         src = sys.argv[1]
         if src.startswith('-s') or src.startswith('-t'):
@@ -74,6 +77,6 @@ def main():
     except IndexError:
         servaddr = '8.8.8.8'
         print('Using default DNS-server:', servaddr, '\n')
-    dnsing(src, types, servaddr, allowtcp=('-tcp' in args), recursive=('-R' not in args))
+    dnsing(src, types, servaddr, allowtcp=('-T' in args), recursive=('-R' not in args))
     
 main()

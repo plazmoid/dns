@@ -9,6 +9,7 @@ TTL = 86400
 packet_id = 0x1010
 
 SRV_FAIL =     0x0002
+SRV_REFSD =    0x0005
 ACC_NON_AUTH = 0x0010
 RECURSIVE =    0x0100
 AUTH_RESP =    0x0400
@@ -19,8 +20,8 @@ def btoi(b):
     return int.from_bytes(b, 'big')
 
 
-def itob(num, s=0):
-    return num.to_bytes(s if s else int(log2(num) // 8 + 1), 'big')
+def itob(num, b=0):
+    return num.to_bytes(b if b else int(log2(num) // 8 + 1), 'big')
 
 
 def ipv6_decoder(bin_addr):
@@ -44,7 +45,7 @@ fieldSections = list(allFields.keys())
 
 class DNSPacket:
 
-    def __init__(self, rawdata=None):
+    def __init__(self, rawdata=None, tcp=False):
         if rawdata and type(rawdata) != bytes:
             raise Exception('DNSPacket needs bytes or None argument')
         self.__binarydata = rawdata
@@ -61,10 +62,14 @@ class DNSPacket:
         self.__records = FlaggedDict({g:[] for g in fieldSections})
         self.readOffs = 0
         self.zone_offsets = {}
+        self.tcp = tcp
         
         if not self.__binarydata:
             self.__configure_packet()
         self.__parse()
+            
+    def __tcp_prepare(self):
+        self.__binarydata = itob(len(self.__binarydata), 2) + self.__binarydata
             
     @staticmethod
     def domain_encode(bStr) -> bytes:
@@ -95,7 +100,6 @@ class DNSPacket:
         self.__records['Flags'] &= (flags & 0xFFFF)
 
     def __setPointers(self, bstr) -> str:
-        '''расстановка указателей на строки в бинарном представлении пакета, ищет в дополнительном буфере (не в основном!)'''
         for i in range(len(bstr)):
             partial_domain = self.domain_encode(bstr[i:])
             if partial_domain in self.zone_offsets.keys() and partial_domain in self.tmp_bindata:
@@ -139,10 +143,14 @@ class DNSPacket:
                     self.tmp_bindata.extend(self.itm)
         self.__binarydata = bytes(self.tmp_bindata)
         self.__records.store()
+        if self.tcp:
+            self.__tcp_prepare()
 
     def __parse(self):
         self.hdrs = [None]*6
         try:
+            if self.tcp:
+                self.__binarydata = self.__binarydata[2:]
             for i in range(len(self.hdrs)):
                 self.hdrs[i] = self.__substr(2)
                 if i>=2:
@@ -180,7 +188,6 @@ class DNSPacket:
             print('Error was in', self.readOffs)
             
     def __substr(self, sublen) -> str:
-        '''как головка, читающая ленту: возвращается sublen следующих элементов строки'''
         self.sub = self.__binarydata[self.readOffs:self.readOffs+sublen]
         self.readOffs += sublen
         return self.sub
@@ -191,7 +198,7 @@ class DNSPacket:
         return self.zone_offsets[bStr]
 
     def strDecode(self, bStr, move_carriage=True) -> bytes:
-        '''парсит бинарную строку из пакета (с длинами до точек и указателями) в читабельную'''
+        '''Parse binary string from packet into readable'''
         result = []
         ptr = None
         strlen = 0
@@ -210,7 +217,7 @@ class DNSPacket:
             self.readOffs += strlen
         return (b'.'.join(result)).decode('ascii')
 
-    def getParsedData(self, arrs=None, nkey=None, *cond): #TODO: што
+    def getParsedData(self, arrs=None, nkey=None, *cond):
         try:
             if nkey == None:
                 if arrs == None:

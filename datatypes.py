@@ -26,11 +26,11 @@ class FlaggedDict(dict):
     '''
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
-        self.__old_vals = self.values()
+        self.store()
         
     def has_changed(self):
-        return self.values() != self.__old_vals
+        return list(self.values()) != self.__old_vals
     
     def store(self):
-        self.__old_vals = self.values()
+        self.__old_vals = list(self.values())
         
