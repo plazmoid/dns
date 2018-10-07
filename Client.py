@@ -42,7 +42,7 @@ def dnsing(url, types, addr, allowtcp=False, recursive=True):
         
     for wtype in types:
         packet = Packet.DNSPacket()
-        params['Type'] = wtype
+        params['Type'] = wtype.upper()
         packet.addField('Queries', params)
         if not recursive:
             packet.flags(~Packet.RECURSIVE)

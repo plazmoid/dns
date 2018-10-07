@@ -49,14 +49,14 @@ class DNSPacket:
             raise Exception('DNSPacket needs bytes or None argument')
         self.__binarydata = rawdata
         self.classes = {b'\x00\x01': 'IN'}
-        self.types = DoubleDict({b'\x00\x01': 'A',
-                      b'\x00\x02': 'NS',
-                      b'\x00\x05': 'CNAME',
-                      b'\x00\x06': 'SOA',
-                      b'\x00\x0c': 'PTR',
-                      b'\x00\x0f': 'MX',
-                      b'\x00\x1c': 'AAAA',
-                      b'\x00\xfc': 'AXFR'})
+        self.types = DoubleDict({
+            b'\x00\x01': 'A',
+            b'\x00\x02': 'NS',
+            b'\x00\x05': 'CNAME',
+            b'\x00\x06': 'SOA',
+            b'\x00\x0f': 'MX',
+            b'\x00\x10': 'TXT',
+            b'\x00\x1c': 'AAAA'})
         
         self.__records = FlaggedDict({g:[] for g in fieldSections})
         self.readOffs = 0
@@ -135,7 +135,6 @@ class DNSPacket:
                         elif ':' in self.itm:
                             self.itm = b''.join(map(lambda a: itob(int(a, 16), 1), self.itm.split(':')))  
                     elif field == 'Name' or field == 'Name server' or field == 'CNAME':
-                        #print(self.itm, self.tmp_bindata)
                         self.itm = self.__setPointers(self.itm.split('.'))
                     self.tmp_bindata.extend(self.itm)
         self.__binarydata = bytes(self.tmp_bindata)
@@ -171,7 +170,10 @@ class DNSPacket:
                                 self.fields['Address'] = '.'.join(map(lambda x: str(x), self.__substr(4)))
                             elif self.fields['Type'] == 'MX':
                                 self.__substr(2) #skip preference
-                                self.fields['Address'] = self.strDecode(self.__substr(self.fields['Data length'] - 2), move_carriage=False)                                
+                                self.fields['Address'] = self.strDecode(self.__substr(self.fields['Data length'] - 2), move_carriage=False)            
+                            elif self.fields['Type'] == 'TXT':
+                                txtlen = btoi(self.__substr(1))
+                                self.fields['Address'] = self.__substr(txtlen).decode('ascii')                
                     self.__records[fgroup].append(self.fields)
         except ArithmeticError:
             traceback.print_exc()
@@ -198,7 +200,6 @@ class DNSPacket:
             if ptr & 0xc0 == 0xc0:
                 result.append(self.getItemByOffset(bStr[:2]))
                 strlen += 2
-                #print('PTR_SOLVE:', result)
                 break
             strlen += ptr+1
             if ptr == 0:
