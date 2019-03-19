@@ -1,4 +1,6 @@
+#!/usr/bin/python
 import Packet
+import argparse
 import socket as s
 import re
 import sys
@@ -20,15 +22,16 @@ def beautifulpacket(data):
     if len(data['Answers']) > 0:
         if data['Flags'] & ~Packet.AUTH_RESP:
             print('Non-authoritative response')
-        print('\t%s' % ' | '.join(hdrs))
+        print('%s' % ' | '.join(hdrs))
         for answer in data['Answers']:
-            print('\t'+' \t| '.join(str(i) for i in answer.values()))
+            print('\t| '.join(str(i) for i in answer.values()))
         print()
 
-def dnsing(url, types, addr, allowtcp=False, recursive=True):
-    params = {'Name': url,
+
+def dnsing(host, types, addr, allowtcp=False, recursive=True):
+    params = {'Name': host,
               'Class': 'IN'}
-    
+
     if allowtcp:
         def cli_ask(data):
             with s.socket(s.AF_INET, s.SOCK_STREAM, s.IPPROTO_TCP) as sock:
@@ -54,29 +57,18 @@ def dnsing(url, types, addr, allowtcp=False, recursive=True):
         beautifulpacket(Packet.DNSPacket(answer, tcp=allowtcp).getParsedData())
 
 
-def usage():
-    print('''Usage: %s host -t type1 type2 ... [-R] [-T] [-s dnsserver]
-    -R\t disable recursion
-    -s\t use user-defined server
-    -t\t record types splitted with space
-    -T\t use TCP''' % (__file__))
-    sys.exit(1)
-
-
 def main():
-    try:
-        src = sys.argv[1]
-        if src.startswith('-s') or src.startswith('-t'):
-            raise IndexError
-        args = ' '.join(sys.argv)
-        types = re.findall(r'-t ([^-]*)', args)[0].strip().split(' ')
-    except IndexError:
-        usage()
-    try:
-        servaddr = re.findall(r'-s (\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3})?', args)[0].strip()
-    except IndexError:
-        servaddr = '8.8.8.8'
-        print('Using default DNS-server:', servaddr, '\n')
-    dnsing(src, types, servaddr, allowtcp=('-T' in args), recursive=('-R' not in args))
-    
-main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-R', action='store_false', dest='recur', help='Disable recursion')
+    parser.add_argument('-T', action='store_true', dest='tcp', help='Use TCP')
+    parser.add_argument('-s', action='store', dest='dnsserv', help='DNS server', default='8.8.8.8')
+    parser.add_argument('-t', action='store', dest='types', help='Type(s) of DNS record', \
+        choices=['A',  'AAAA', 'NS', 'TXT', 'MX', 'CNAME'], nargs='+', default=['A'])
+    parser.add_argument('host', action='store', help='Host name')
+    args = parser.parse_args()
+    #print(vars(args))
+    dnsing(args.host, args.types, args.dnsserv, allowtcp=args.tcp, recursive=args.recur)
+
+
+if __name__ == '__main__':
+    main()
