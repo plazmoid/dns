@@ -43,9 +43,11 @@ def dns_request(data, server, tcp=False):
         if tcp:
             sock.connect(server)
             sock.send(data)
+            datalen = sock.recv(2)
+            return datalen + sock.recv(int.from_bytes(datalen, 'big'))
         else:
             sock.sendto(data, server)            
-        return sock.recv(2048)
+            return sock.recv(2048)
         
         
 # l.rootservers.net
