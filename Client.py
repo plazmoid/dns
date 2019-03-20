@@ -1,15 +1,18 @@
-#!/usr/bin/python
-from pprint import PrettyPrinter
+#!/usr/bin/env python
+from pprint import pformat
+from functools import partial
 import Packet
 import argparse
 import socket as s
+import logging
 
-DEBUG = False
-printer = PrettyPrinter(indent=4)
+pformat = partial(pformat, indent=1)
+logger = logging.getLogger(__name__)
+
 
 def beautifulpacket(data):
     print()
-    hdrs = ['Name', 'Type', 'Class', 'TTL', 'Data length', 'Data']
+    hdrs = ['Name', 'Type', 'Class', 'TTL', 'Length', 'Data']
     try:
         print(' '.join(i for i in data['Queries'][0].values()))
     except:
@@ -24,61 +27,67 @@ def beautifulpacket(data):
     if len(data['Answers']) > 0:
         if data['Flags'] & ~Packet.AUTH_RESP:
             print('Non-authoritative response')
-        print('%s' % ' | '.join(hdrs))
+        print('%s' % '\t| '.join(hdrs))
         for answer in data['Answers']:
             print('\t| '.join(str(i) for i in answer.values()))
         print()
 
 
-def dns_request(data, server, tcp=False):
+def dns_request(data, server, timeout, tcp=False):
     if tcp:
         ptype = s.SOCK_STREAM
         proto = s.IPPROTO_TCP
+
+        def recv_at_any_cost(sock, l):
+            res = b''
+            while len(res) < l:
+                res += sock.recv(l - len(res))
+            return res
     else:
         ptype = s.SOCK_DGRAM
         proto = s.IPPROTO_UDP
-        
+
     with s.socket(s.AF_INET, ptype, proto) as sock:
-        sock.settimeout(3)
+        sock.settimeout(timeout)
         if tcp:
             sock.connect(server)
             sock.send(data)
-            datalen = sock.recv(2)
-            return datalen + sock.recv(int.from_bytes(datalen, 'big'))
+            datalen = recv_at_any_cost(sock, 2)
+            return datalen + recv_at_any_cost(sock, int.from_bytes(datalen, 'big'))
         else:
-            sock.sendto(data, server)            
+            sock.sendto(data, server)
             return sock.recv(2048)
-        
-        
-# l.rootservers.net
-def DNSQuery(data, server='199.7.83.42', port='53', tcp=False):
-    global DEBUG, printer
-    raw_answer = dns_request(data, server=(server, port), tcp=tcp)
+
+
+def DNSQuery(data, server, port, timeout, tcp=False):
+    raw_answer = dns_request(data, (server, port), timeout, tcp=tcp)
     if not raw_answer:
-        return -2
+        return
     response = Packet.DNSPacket(raw_answer, tcp=tcp)
-    if DEBUG:
-        print('\n>>>', server)
-        printer.pprint(Packet.DNSPacket(data, tcp=tcp))
-        print('\n<<<', server)
-        printer.pprint(response)
+    logger.debug('\n>>> {0} \n{1} \n<<< {0} \n{2}'.format(
+        server,
+        pformat(Packet.DNSPacket(data, tcp=tcp)),
+        pformat(response)
+    ))
     if len(response['Answers']) > 0:
         return response
-    additional = filter(lambda x: x['Type'] == 'A', response['Additional records']) 
+    additional = filter(lambda x: x['Type'] == 'A',
+                        response['Additional records'])
     for srv in additional:
-        add_resp = DNSQuery(data, server=srv['Address'], port=port, tcp=tcp)
+        add_resp = DNSQuery(data, srv['Address'], port, tcp=tcp)
         if add_resp and len(add_resp['Answers']) > 0:
             return add_resp
-    authoritative = filter(lambda x: x['Type'] == 'NS', response['Authoritative NS']) 
+    authoritative = filter(
+        lambda x: x['Type'] == 'NS', response['Authoritative NS'])
     for srv in authoritative:
-        auth_resp = DNSQuery(data, server=srv['Name server'], port=port, tcp=tcp)
+        auth_resp = DNSQuery(data, srv['Name server'], port, tcp=tcp)
         if auth_resp and len(auth_resp['Answers']) > 0:
             return auth_resp
     raise Exception('Something very bad happened during the query')
 
 
-def dnsing(host, types, dnsserv, port='53', tcp=False, recursive=False):
-    global DEBUG, printer
+def dnsing(host, types, dnsserv, port=53, timeout=3, tcp=False, recursive=False):
+    result = []
     for wtype in types:
         params = {'Name': host,
                   'Class': 'IN'}
@@ -87,19 +96,19 @@ def dnsing(host, types, dnsserv, port='53', tcp=False, recursive=False):
         packet.addField('Queries', params)
         rawdata = packet.getRawData()
         if recursive:
-            if dnsserv == '8.8.8.8':
-                ans_dict = DNSQuery(rawdata, port=port, tcp=tcp)
-            else:
-                ans_dict = DNSQuery(rawdata, server=dnsserv, port=port, tcp=tcp)
+            ans_dict = DNSQuery(rawdata, dnsserv, port, timeout, tcp=tcp)
         else:
-            raw_answer = dns_request(rawdata, (dnsserv, port), tcp=tcp)
+            raw_answer = dns_request(
+                rawdata, (dnsserv, port), timeout, tcp=tcp)
             ans_dict = Packet.DNSPacket(raw_answer, tcp=tcp)
-            if DEBUG:
-                print('\n>>>', dnsserv)
-                printer.pprint(packet)
-                print('\n<<<', dnsserv)
-                printer.pprint(ans_dict)
-        return ans_dict
+            logger.debug('\n>>> {0} \n{1} \n\n<<< {0} \n{2}'.format(
+                dnsserv,
+                pformat(packet),
+                pformat(ans_dict)
+            ))
+        result.append(ans_dict)
+        beautifulpacket(ans_dict)
+    return result
 
 
 def main():
@@ -108,19 +117,23 @@ def main():
     parser.add_argument('-r', '--recursive', action='store_true',
                         dest='recur', help='Recursive query')
     parser.add_argument('-T', action='store_true', dest='tcp', help='Use TCP')
-    parser.add_argument('-p', action='store', dest='port', help='Port', type=int, 
+    parser.add_argument('-o', '--timeout', action='store', dest='timeout',
+                        help='Timeout', type=float, default=3)
+    parser.add_argument('-p', action='store', dest='port', help='Port', type=int,
                         default=53)
-    parser.add_argument('-d', '--debug', action='store_true', dest='debug', help='Debug-mode')
+    parser.add_argument('-d', '--debug', action='store_true',
+                        dest='debug', help='Debug-mode')
     parser.add_argument('-s', action='store', dest='dnsserv',
-                        help='DNS server', default='8.8.8.8')
+                        help='DNS server', default='8.8.8.8')  # l.rootservers.net: '199.7.83.42'
     parser.add_argument('-t', action='store', dest='types', help='Type(s) of DNS record',
                         choices=['A',  'AAAA', 'NS', 'TXT', 'MX', 'CNAME'], nargs='+', default=['A'])
     parser.add_argument('host', action='store', help='Host name')
     args = parser.parse_args()
-    
-    DEBUG = args.debug
-    beautifulpacket(dnsing(args.host, args.types, args.dnsserv,
-           port=args.port, tcp=args.tcp, recursive=args.recur))
+
+    log_lvl = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=log_lvl)
+    dnsing(args.host, args.types, args.dnsserv,
+           args.port, args.timeout, tcp=args.tcp, recursive=args.recur)
 
 
 if __name__ == '__main__':

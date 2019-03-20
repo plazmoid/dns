@@ -13,4 +13,3 @@ class DoubleDict(dict):
             return dict.__getitem__(self, *args, **kwargs)
         except KeyError:
             return self.mirrored.__getitem__(*args, **kwargs)
-

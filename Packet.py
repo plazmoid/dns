@@ -38,7 +38,7 @@ def ipv6_encoder(addr):
     addr = addr.split(':')
     emptiness = addr.index('')
     if emptiness >= 0:
-        for _ in range(8 - len(addr)): 
+        for _ in range(8 - len(addr)):
             addr.insert(emptiness, '')
     return b''.join(itob(int(a.rjust(4, '0'), 16), 2) for a in addr)
 
@@ -251,4 +251,3 @@ class DNSPacket(dict):
 
     def store(self):
         self.__old_vals = list(self.values())
-        
