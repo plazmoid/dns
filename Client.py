@@ -1,12 +1,14 @@
 #!/usr/bin/python
+from pprint import PrettyPrinter
 import Packet
 import argparse
 import socket as s
-import re
-import sys
 
+DEBUG = False
+printer = PrettyPrinter(indent=4)
 
 def beautifulpacket(data):
+    print()
     hdrs = ['Name', 'Type', 'Class', 'TTL', 'Data length', 'Data']
     try:
         print(' '.join(i for i in data['Queries'][0].values()))
@@ -28,46 +30,95 @@ def beautifulpacket(data):
         print()
 
 
-def dnsing(host, types, addr, allowtcp=False, recursive=True):
-    params = {'Name': host,
-              'Class': 'IN'}
-
-    if allowtcp:
-        def cli_ask(data):
-            with s.socket(s.AF_INET, s.SOCK_STREAM, s.IPPROTO_TCP) as sock:
-                sock.connect((addr, 53))
-                sock.settimeout(3)
-                sock.send(data)
-                return sock.recv(2048)
+def dns_request(data, server, tcp=False):
+    if tcp:
+        ptype = s.SOCK_STREAM
+        proto = s.IPPROTO_TCP
     else:
-        def cli_ask(data):
-            with s.socket(s.AF_INET, s.SOCK_DGRAM, s.IPPROTO_UDP) as sock:
-                sock.settimeout(3)
-                sock.sendto(data, (addr, 53))
-                return sock.recv(2048)
+        ptype = s.SOCK_DGRAM
+        proto = s.IPPROTO_UDP
         
+    with s.socket(s.AF_INET, ptype, proto) as sock:
+        sock.settimeout(3)
+        if tcp:
+            sock.connect(server)
+            sock.send(data)
+        else:
+            sock.sendto(data, server)            
+        return sock.recv(2048)
+        
+        
+# l.rootservers.net
+def DNSQuery(data, server='199.7.83.42', port='53', tcp=False):
+    global DEBUG, printer
+    raw_answer = dns_request(data, server=(server, port), tcp=tcp)
+    if not raw_answer:
+        return -2
+    response = Packet.DNSPacket(raw_answer)
+    if DEBUG:
+        print('\n>>>', server)
+        printer.pprint(Packet.DNSPacket(data))
+        print('\n<<<', server)
+        printer.pprint(response)
+    if len(response['Answers']) > 0:
+        return response
+    additional = filter(lambda x: x['Type'] == 'A', response['Additional records']) 
+    for srv in additional:
+        add_resp = DNSQuery(data, server=srv['Address'], port=port, tcp=tcp)
+        if add_resp and len(add_resp['Answers']) > 0:
+            return add_resp
+    authoritative = filter(lambda x: x['Type'] == 'NS', response['Authoritative NS']) 
+    for srv in authoritative:
+        auth_resp = DNSQuery(data, server=srv['Name server'], port=port, tcp=tcp)
+        if auth_resp and len(auth_resp['Answers']) > 0:
+            return auth_resp
+    raise Exception('Something very bad happened during the query')
+
+
+def dnsing(host, types, dnsserv, port='53', tcp=False, recursive=False):
+    global DEBUG, printer
     for wtype in types:
-        packet = Packet.DNSPacket(tcp=allowtcp)
+        params = {'Name': host,
+                  'Class': 'IN'}
+        packet = Packet.DNSPacket(tcp=tcp)
         params['Type'] = wtype.upper()
         packet.addField('Queries', params)
-        if not recursive:
-            packet.flags(~Packet.RECURSIVE)
-        #print(packet.getRawData())
-        answer = cli_ask(packet.getRawData())
-        beautifulpacket(Packet.DNSPacket(answer, tcp=allowtcp).getParsedData())
+        rawdata = packet.getRawData()
+        if recursive:
+            if dnsserv == '8.8.8.8':
+                ans_dict = DNSQuery(rawdata, port=port, tcp=tcp)
+            else:
+                ans_dict = DNSQuery(rawdata, server=dnsserv, port=port, tcp=tcp)
+        else:
+            raw_answer = dns_request(rawdata, (dnsserv, port), tcp=tcp)
+            ans_dict = Packet.DNSPacket(raw_answer, tcp=tcp)
+            if DEBUG:
+                print('\n>>>', dnsserv)
+                printer.pprint(packet)
+                print('\n<<<', dnsserv)
+                printer.pprint(ans_dict)
+        beautifulpacket(ans_dict)
 
 
 def main():
+    global DEBUG
     parser = argparse.ArgumentParser()
-    parser.add_argument('-R', action='store_false', dest='recur', help='Disable recursion')
+    parser.add_argument('-r', '--recursive', action='store_true',
+                        dest='recur', help='Recursive query')
     parser.add_argument('-T', action='store_true', dest='tcp', help='Use TCP')
-    parser.add_argument('-s', action='store', dest='dnsserv', help='DNS server', default='8.8.8.8')
-    parser.add_argument('-t', action='store', dest='types', help='Type(s) of DNS record', \
-        choices=['A',  'AAAA', 'NS', 'TXT', 'MX', 'CNAME'], nargs='+', default=['A'])
+    parser.add_argument('-p', action='store', dest='port', help='Port', type=int, 
+                        default=53)
+    parser.add_argument('-d', '--debug', action='store_true', dest='debug', help='Debug-mode')
+    parser.add_argument('-s', action='store', dest='dnsserv',
+                        help='DNS server', default='8.8.8.8')
+    parser.add_argument('-t', action='store', dest='types', help='Type(s) of DNS record',
+                        choices=['A',  'AAAA', 'NS', 'TXT', 'MX', 'CNAME'], nargs='+', default=['A'])
     parser.add_argument('host', action='store', help='Host name')
     args = parser.parse_args()
-    #print(vars(args))
-    dnsing(args.host, args.types, args.dnsserv, allowtcp=args.tcp, recursive=args.recur)
+    
+    DEBUG = args.debug
+    dnsing(args.host, args.types, args.dnsserv,
+           port=args.port, tcp=args.tcp, recursive=args.recur)
 
 
 if __name__ == '__main__':
