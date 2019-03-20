@@ -54,10 +54,10 @@ def DNSQuery(data, server='199.7.83.42', port='53', tcp=False):
     raw_answer = dns_request(data, server=(server, port), tcp=tcp)
     if not raw_answer:
         return -2
-    response = Packet.DNSPacket(raw_answer)
+    response = Packet.DNSPacket(raw_answer, tcp=tcp)
     if DEBUG:
         print('\n>>>', server)
-        printer.pprint(Packet.DNSPacket(data))
+        printer.pprint(Packet.DNSPacket(data, tcp=tcp))
         print('\n<<<', server)
         printer.pprint(response)
     if len(response['Answers']) > 0:
@@ -97,7 +97,7 @@ def dnsing(host, types, dnsserv, port='53', tcp=False, recursive=False):
                 printer.pprint(packet)
                 print('\n<<<', dnsserv)
                 printer.pprint(ans_dict)
-        beautifulpacket(ans_dict)
+        return ans_dict
 
 
 def main():
@@ -117,8 +117,8 @@ def main():
     args = parser.parse_args()
     
     DEBUG = args.debug
-    dnsing(args.host, args.types, args.dnsserv,
-           port=args.port, tcp=args.tcp, recursive=args.recur)
+    beautifulpacket(dnsing(args.host, args.types, args.dnsserv,
+           port=args.port, tcp=args.tcp, recursive=args.recur))
 
 
 if __name__ == '__main__':

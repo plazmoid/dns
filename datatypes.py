@@ -1,5 +1,3 @@
-import sys
-
 
 class DoubleDict(dict):
     '''
@@ -14,10 +12,5 @@ class DoubleDict(dict):
         try:
             return dict.__getitem__(self, *args, **kwargs)
         except KeyError:
-            try:
-                return self.mirrored.__getitem__(*args, **kwargs)
-            except KeyError:
-                print('Unknown type', *args, **kwargs)
-                sys.exit(1)
-
+            return self.mirrored.__getitem__(*args, **kwargs)
 
