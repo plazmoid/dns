@@ -24,6 +24,9 @@ def beautifulpacket(data):
     if data['Flags'] & Packet.SRV_REFSD:
         print('Refused')
         return
+    if (not (data['Flags'] & Packet.CAN_RECURSION)) and \
+            (data['Flags'] & Packet.RECURSIVE):
+        print('''This server can\'t do recursive query, add "-r" key to perform it on the client side''')
     if len(data['Answers']) > 0:
         if data['Flags'] & ~Packet.AUTH_RESP:
             print('Non-authoritative response')
@@ -74,13 +77,13 @@ def DNSQuery(data, server, port, timeout, tcp=False):
     additional = filter(lambda x: x['Type'] == 'A',
                         response['Additional records'])
     for srv in additional:
-        add_resp = DNSQuery(data, srv['Address'], port, tcp=tcp)
+        add_resp = DNSQuery(data, srv['Address'], port, timeout, tcp=tcp)
         if add_resp and len(add_resp['Answers']) > 0:
             return add_resp
     authoritative = filter(
         lambda x: x['Type'] == 'NS', response['Authoritative NS'])
     for srv in authoritative:
-        auth_resp = DNSQuery(data, srv['Name server'], port, tcp=tcp)
+        auth_resp = DNSQuery(data, srv['Name server'], port, timeout, tcp=tcp)
         if auth_resp and len(auth_resp['Answers']) > 0:
             return auth_resp
     raise Exception('Something very bad happened during the query')
@@ -94,12 +97,13 @@ def dnsing(host, types, dnsserv, port=53, timeout=3, tcp=False, recursive=False)
         packet = Packet.DNSPacket(tcp=tcp)
         params['Type'] = wtype.upper()
         packet.addField('Queries', params)
-        rawdata = packet.getRawData()
         if recursive:
-            ans_dict = DNSQuery(rawdata, dnsserv, port, timeout, tcp=tcp)
+            packet.flags(~Packet.RECURSIVE)
+            ans_dict = DNSQuery(
+                packet.getRawData(), dnsserv, port, timeout, tcp=tcp)
         else:
             raw_answer = dns_request(
-                rawdata, (dnsserv, port), timeout, tcp=tcp)
+                packet.getRawData(), (dnsserv, port), timeout, tcp=tcp)
             ans_dict = Packet.DNSPacket(raw_answer, tcp=tcp)
             logger.debug('\n>>> {0} \n{1} \n\n<<< {0} \n{2}'.format(
                 dnsserv,
